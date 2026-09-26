@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CSS 层叠判定工作台</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>CSS 层叠判定工作台</h1>
+      <span class="subtitle">本地运行 · 只分析 color / background-color / font-size · 不计继承与默认样式</span>
+    </div>
+    <div class="example-bar">
+      <label for="exampleSelect">载入示例：</label>
+      <select id="exampleSelect"></select>
+      <button id="loadExampleBtn" type="button">载入</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- 左：编辑器 -->
+    <section class="panel">
+      <h2>HTML</h2>
+      <p class="hint">仅允许 <code>div</code> / <code>section</code> / <code>p</code> / <code>span</code> 标签，<code>id</code> / <code>class</code> 属性和文本。</p>
+      <textarea id="htmlEditor" class="editor" spellcheck="false"
+        placeholder="<div id=&quot;main&quot;>&#10;  <p class=&quot;text&quot;>文本</p>&#10;</div>"></textarea>
+      <div id="htmlErrors" class="error-box" hidden></div>
+
+      <div class="rules-head">
+        <h2>规则</h2>
+        <div class="rules-actions">
+          <button id="simplifyBtn" type="button" class="btn-secondary"
+            title="在保持每个元素 color / background-color / font-size 胜出值（含无声明）完全不变的前提下，找出保留条数最少的规则子序列">
+            ✂ 等价精简
+          </button>
+          <button id="addRuleBtn" type="button" class="btn-secondary">+ 添加规则</button>
+        </div>
+      </div>
+      <p class="hint simplify-hint">等价精简仅支持合法 HTML 中至多 40 个元素、至多 10 条合法规则；计算后需确认才会替换规则。</p>
+      <div id="rulesList" class="rules-list"></div>
+
+      <details class="rules-doc">
+        <summary>选择器与层叠规则说明</summary>
+        <ul>
+          <li>选择器支持：类型（<code>div</code>）、ID（<code>#a</code>）、类（<code>.b</code>）、后代（<code>div p</code>）、直接子代（<code>section &gt; p</code>），如 <code>#main .box &gt; span</code>；其他写法报错。</li>
+          <li><code>!important</code> 声明优先于普通声明。</li>
+          <li>普通声明：无层 &gt; 有层；都有层时，后出现的层优先。</li>
+          <li><code>!important</code> 声明：有层 &gt; 无层；都有层时，先出现的层优先（与普通声明相反）。</li>
+          <li>层顺序按层名首次出现的位置确定。</li>
+          <li>同层（同重要级）：依次比较 ID 数、类数、类型数，再比较规则顺序（靠后者优先）。</li>
+          <li>“等价精简”会穷举原序规则子序列，并对每个候选重新计算层名首次出现顺序与层叠结果，找出使全部元素三属性胜出值（含无声明）不变的最短保留集；确认后才会替换规则。</li>
+        </ul>
+      </details>
+    </section>
+
+    <!-- 右：预览 + 分析 -->
+    <section class="panel">
+      <h2>预览</h2>
+      <p class="hint">点击任意元素进行分析（预览不模拟继承，无胜出声明的属性使用中性占位值）。</p>
+      <div id="previewHost" class="preview-host"></div>
+      <div id="selectedInfo" class="selected-info">未选择元素</div>
+
+      <div class="prop-row">
+        <label for="propSelect">分析属性：</label>
+        <select id="propSelect">
+          <option value="color">color</option>
+          <option value="background-color">background-color</option>
+          <option value="font-size">font-size</option>
+        </select>
+      </div>
+
+      <h2>层叠分析</h2>
+      <div id="layerOrderInfo" class="layer-order"></div>
+      <div id="analysis" class="analysis">
+        <p class="empty-tip">点击左侧预览中的元素后，此处展示匹配声明、胜出值与落败原因。</p>
+      </div>
+    </section>
+  </main>
+
+  <div id="simplifyModal" class="modal-overlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="simplifyModalTitle">
+      <h2 id="simplifyModalTitle">等价精简结果</h2>
+      <div id="simplifyModalBody" class="modal-body"></div>
+      <div class="modal-actions">
+        <button id="simplifyCancelBtn" type="button" class="btn-secondary">取消</button>
+        <button id="simplifyConfirmBtn" type="button" hidden>确认替换</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

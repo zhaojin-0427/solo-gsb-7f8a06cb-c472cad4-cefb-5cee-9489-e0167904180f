@@ -1,0 +1,13 @@
+{
+  "name": "specificity",
+  "title": "特异性演示",
+  "description": "同层（同重要级）时依次比较 ID、类、类型选择器数量；全相同时规则靠后者优先。",
+  "html": "<div id=\"main\" class=\"container\">\n  <section class=\"box\">\n    <p class=\"text\">这是一段文字：观察 color 与 background-color</p>\n  </section>\n</div>",
+  "rules": [
+    { "selector": "p", "property": "color", "value": "gray", "layer": "", "important": false },
+    { "selector": ".text", "property": "color", "value": "orange", "layer": "", "important": false },
+    { "selector": "#main .text", "property": "color", "value": "red", "layer": "", "important": false },
+    { "selector": "div section p", "property": "background-color", "value": "yellow", "layer": "", "important": false },
+    { "selector": ".container .box p", "property": "background-color", "value": "lightgreen", "layer": "", "important": false }
+  ]
+}

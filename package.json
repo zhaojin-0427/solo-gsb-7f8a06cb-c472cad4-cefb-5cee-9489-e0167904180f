@@ -1,0 +1,14 @@
+{
+  "name": "css-cascade-workbench",
+  "version": "1.0.0",
+  "private": true,
+  "description": "本地 CSS 层叠判定工作台：编辑受限 HTML 与规则，点击预览元素查看层叠判定过程",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/engine.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

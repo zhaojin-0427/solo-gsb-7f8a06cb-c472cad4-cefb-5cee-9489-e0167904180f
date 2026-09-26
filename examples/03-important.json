@@ -1,0 +1,13 @@
+{
+  "name": "important",
+  "title": "!important 与层",
+  "description": "!important 优先于普通声明；!important 之间有层高于无层，同有层时先出现的层优先（即使特异性更低）。",
+  "html": "<section>\n  <p class=\"a\">p.a：important 分层演示</p>\n  <span class=\"b\">span.b：有层 important 与无层 important</span>\n</section>",
+  "rules": [
+    { "selector": "p", "property": "color", "value": "black", "layer": "", "important": false },
+    { "selector": "p", "property": "color", "value": "teal", "layer": "early", "important": true },
+    { "selector": "p.a", "property": "color", "value": "crimson", "layer": "late", "important": true },
+    { "selector": "span.b", "property": "color", "value": "navy", "layer": "", "important": true },
+    { "selector": "span", "property": "color", "value": "maroon", "layer": "x", "important": true }
+  ]
+}

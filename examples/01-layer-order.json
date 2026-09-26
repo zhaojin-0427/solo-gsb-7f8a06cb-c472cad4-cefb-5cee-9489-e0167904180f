@@ -1,0 +1,13 @@
+{
+  "name": "layer-order",
+  "title": "层顺序演示",
+  "description": "普通声明：无层 > 有层，同有层时后出现的层优先；!important 声明的层顺序规则相反。",
+  "html": "<section id=\"page\">\n  <p class=\"text\">第一段文字（.text）：无层声明 purple 胜出</p>\n  <p>第二段文字：无无层匹配，后层 components 的 green 胜出</p>\n</section>",
+  "rules": [
+    { "selector": "p", "property": "color", "value": "blue", "layer": "base", "important": false },
+    { "selector": "p", "property": "color", "value": "green", "layer": "components", "important": false },
+    { "selector": "p.text", "property": "color", "value": "purple", "layer": "", "important": false },
+    { "selector": "section > p", "property": "font-size", "value": "20px", "layer": "base", "important": false },
+    { "selector": "p", "property": "font-size", "value": "14px", "layer": "components", "important": false }
+  ]
+}
