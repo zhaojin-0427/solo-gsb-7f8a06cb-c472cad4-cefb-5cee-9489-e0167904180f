@@ -18,6 +18,10 @@ const simplifyModal = $('#simplifyModal');
 const simplifyModalBody = $('#simplifyModalBody');
 const simplifyCancelBtn = $('#simplifyCancelBtn');
 const simplifyConfirmBtn = $('#simplifyConfirmBtn');
+const locatorBox = $('#locatorBox');
+const locatorSelector = $('#locatorSelector');
+const locatorMsg = $('#locatorMsg');
+const copyLocatorBtn = $('#copyLocatorBtn');
 const toast = $('#toast');
 
 const shadow = previewHost.attachShadow({ mode: 'open' });
@@ -39,6 +43,7 @@ const state = {
 
 let computeSeq = 0;
 let analyzeSeq = 0;
+let locatorSeq = 0;
 
 /* ---------------- 工具 ---------------- */
 
@@ -167,6 +172,7 @@ shadow.addEventListener('click', (e) => {
   markPicked(state.selectedPath);
   selectedInfoBox.innerHTML = describeElement(el);
   analyze();
+  locate();
 });
 
 shadow.addEventListener('mouseover', (e) => {
@@ -365,6 +371,7 @@ async function compute() {
   state.styles = data.styles || {};
 
   const htmlOk = !(data.htmlErrors && data.htmlErrors.length);
+  if (!htmlOk) hideLocator(); // HTML 非法时无有效元素树，不展示唯一选择器
   if (htmlOk && state.html !== state.lastRenderedHtml) {
     renderPreview(state.html);
     state.lastRenderedHtml = state.html;
@@ -373,12 +380,14 @@ async function compute() {
     } else {
       state.selectedPath = null;
       selectedInfoBox.textContent = '未选择元素';
+      hideLocator();
     }
   }
   if (htmlOk) {
     applyStyles();
     if (state.selectedPath && elByPath(state.selectedPath)) {
       analyze();
+      locate();
     } else {
       analysisBox.innerHTML = '<p class="empty-tip">点击预览中的元素后，此处展示匹配声明、胜出值与落败原因。</p>';
     }
@@ -402,6 +411,80 @@ async function analyze() {
   if (seq !== analyzeSeq) return;
   renderAnalysis(data);
 }
+
+/* ---------------- 唯一选择器 ---------------- */
+
+function hideLocator(message) {
+  ++locatorSeq; // 使在途的唯一选择器请求作废，避免旧结果覆盖新状态
+  locatorBox.hidden = true;
+  locatorSelector.textContent = '';
+  locatorMsg.hidden = true;
+  locatorMsg.textContent = '';
+  if (message) {
+    locatorBox.hidden = false;
+    locatorMsg.hidden = false;
+    locatorMsg.textContent = message;
+  }
+}
+
+function renderLocator(data) {
+  locatorBox.hidden = false;
+  if (data.ok && data.selector) {
+    locatorSelector.hidden = false;
+    locatorSelector.textContent = data.selector;
+    locatorMsg.hidden = true;
+    locatorMsg.textContent = '';
+  } else {
+    locatorSelector.hidden = true;
+    locatorSelector.textContent = '';
+    locatorMsg.hidden = false;
+    locatorMsg.textContent = data.message || '无法生成唯一选择器。';
+  }
+}
+
+async function locate() {
+  if (state.selectedPath == null) {
+    hideLocator();
+    return;
+  }
+  const seq = ++locatorSeq;
+  let data;
+  try {
+    data = await postJson('/api/locator', { html: state.html, path: state.selectedPath });
+  } catch (err) {
+    if (seq === locatorSeq) showToast(`获取唯一选择器失败：${err.message}`);
+    return;
+  }
+  if (seq !== locatorSeq) return;
+  renderLocator(data);
+}
+
+async function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  // 非安全上下文（如纯 HTTP 局域网访问）下的兜底方案
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.append(ta);
+  ta.select();
+  document.execCommand('copy');
+  ta.remove();
+}
+
+copyLocatorBtn.addEventListener('click', async () => {
+  const text = locatorSelector.textContent;
+  if (!text) return;
+  try {
+    await copyText(text);
+    showToast('唯一选择器已复制');
+  } catch {
+    showToast('复制失败，请手动选择文本复制');
+  }
+});
 
 /* ---------------- 等价精简 ---------------- */
 
@@ -563,6 +646,7 @@ function loadExample(ex) {
   htmlEditor.value = state.html;
   renderRules();
   selectedInfoBox.textContent = '未选择元素';
+  hideLocator();
   compute();
 }
 

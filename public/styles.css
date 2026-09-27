@@ -273,6 +273,55 @@ button:hover { filter: brightness(1.08); }
 
 .selected-info strong { color: var(--text); }
 
+/* ---------- 唯一选择器 ---------- */
+
+.locator-box {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fbfcfe;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+}
+
+.locator-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.locator-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.btn-mini {
+  padding: 2px 10px;
+  font-size: 12px;
+}
+
+.locator-selector {
+  display: block;
+  margin-top: 6px;
+  font-size: 13px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  word-break: break-all;
+  user-select: all;
+}
+
+.locator-selector[hidden] { display: none; }
+
+.locator-msg {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--reason);
+  line-height: 1.6;
+}
+
+.locator-msg::before { content: "⚠ "; }
+
 .prop-row {
   display: flex;
   align-items: center;

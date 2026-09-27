@@ -721,3 +721,186 @@ export function simplifyRules(roots, rules) {
     originalLayerOrder: full.layerOrder,
   };
 }
+
+/* ------------------------------------------------------------------ */
+/* 唯一选择器                                                           */
+/* ------------------------------------------------------------------ */
+
+/** 唯一选择器允许的最大元素数、最大段数与可取用的最远祖先层数。 */
+export const LOCATOR_MAX_ELEMENTS = 40;
+const LOCATOR_MAX_PARTS = 3;
+const LOCATOR_MAX_ANCESTOR_LEVELS = 7;
+
+/** 候选文本排序：字符串长度最短优先，其次字典序最小。 */
+function compareSelectorText(a, b) {
+  return a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
+}
+
+/**
+ * 节点的单段候选：从该节点的类型、合法 #id、单个合法 .class 中各取可选项。
+ * 合法性以选择器语法（IDENT_RE）为准：HTML 允许任意非空 id / 类名，
+ * 但含空格、点号等的写法无法用本工具的选择器语法表达，不计入候选。
+ * 去重后按（长度、字典序）排序。
+ */
+function locatorSegmentsOf(node) {
+  const set = new Set([node.tag]);
+  if (node.id !== null && IDENT_RE.test(node.id)) set.add(`#${node.id}`);
+  for (const cls of new Set(node.classes)) {
+    if (IDENT_RE.test(cls)) set.add(`.${cls}`);
+  }
+  return [...set].sort(compareSelectorText);
+}
+
+/**
+ * 为目标元素生成"唯一选择器"：
+ *  - 取目标节点及其最近 7 层祖先，每段从对应节点的类型 / 合法 #id /
+ *    单个合法 .class 中选一个，最后一段必须是目标段，至多 3 段；
+ *  - 段间使用后代空格或直接子代 >（> 只能连接树中相邻的父子节点）；
+ *  - 候选必须在整棵树上只命中目标（先以位掩码按与 matchesSelector 完全
+ *    一致的语义快速判别，再用现有 parseSelector / matchesSelector 复验）；
+ *  - 依次按段数最少、字符串长度最短、字典序最小择优；
+ *  - 限定范围内无候选时返回 null。
+ *
+ * 调用方须先保证目标节点属于 roots 所构成的树。
+ */
+export function findUniqueSelector(roots, target) {
+  const all = [];
+  const flatten = (node) => { all.push(node); node.children.forEach(flatten); };
+  roots.forEach(flatten);
+  if (!target || !all.includes(target)) return null;
+
+  const indexOf = new Map();
+  all.forEach((node, i) => indexOf.set(node, i));
+  const bitOf = (node) => 1n << BigInt(indexOf.get(node));
+
+  // 每个节点的全部祖先位掩码（沿父链）
+  const ancestorMask = new Map();
+  for (const node of all) {
+    let mask = 0n;
+    for (let p = node.parent; p; p = p.parent) mask |= bitOf(p);
+    ancestorMask.set(node, mask);
+  }
+
+  // 单段选择器字符串 -> 整棵树命中节点的位掩码
+  const matchMask = new Map();
+  for (const node of all) {
+    for (const seg of locatorSegmentsOf(node)) {
+      matchMask.set(seg, (matchMask.get(seg) ?? 0n) | bitOf(node));
+    }
+  }
+
+  // 目标 + 最近 7 层祖先（chain[0] 为目标）
+  const chain = [target];
+  for (let p = target.parent; p && chain.length <= LOCATOR_MAX_ANCESTOR_LEVELS; p = p.parent) {
+    chain.push(p);
+  }
+
+  /*
+   * 同一链节点上、全局命中集合相同的两段候选，在任何组合中的判别力完全一致，
+   * 因而每个命中集合只保留（长度、字典序）最优的一个字符串即可。
+   * locatorSegmentsOf 已排序，首个出现的即最优。
+   */
+  const groups = chain.map((node) => {
+    const map = new Map();
+    for (const seg of locatorSegmentsOf(node)) {
+      const mask = matchMask.get(seg);
+      if (!map.has(mask)) map.set(mask, seg);
+    }
+    return map;
+  });
+
+  const targetBit = bitOf(target);
+
+  /**
+   * 以上段命中集合 upper 限定下段已匹配集合 lower：
+   * combinator 为 'child' 时要求父节点 ∈ upper，为 'descendant' 时要求任一祖先 ∈ upper。
+   * 语义与 matchesSelector 沿父链匹配的规则一致。
+   */
+  const combine = (upper, lower, combinator) => {
+    let out = 0n;
+    for (const node of all) {
+      const bit = bitOf(node);
+      if (!(lower & bit)) continue;
+      if (combinator === 'child') {
+        if (node.parent && (upper & bitOf(node.parent))) out |= bit;
+      } else if (ancestorMask.get(node) & upper) {
+        out |= bit;
+      }
+    }
+    return out;
+  };
+
+  /** 用现有选择器解析与匹配规则在整棵树上复验：必须且只命中目标一个节点。 */
+  const verify = (selector) => {
+    let parsed;
+    try {
+      parsed = parseSelector(selector);
+    } catch {
+      return false;
+    }
+    let hits = 0;
+    for (const node of all) {
+      if (matchesSelector(node, parsed)) {
+        if (node !== target) return false;
+        hits += 1;
+      }
+    }
+    return hits === 1;
+  };
+
+  /** 位掩码判别的候选仍以现有匹配规则复验后，取排序最优者。 */
+  const pickBest = (candidates) => {
+    for (const selector of [...candidates].sort(compareSelectorText)) {
+      if (verify(selector)) return selector;
+    }
+    return null;
+  };
+
+  const join3 = (s1, c1, s2, c2, s3) =>
+    `${s1}${c1 === 'child' ? ' > ' : ' '}${s2}${c2 === 'child' ? ' > ' : ' '}${s3}`;
+
+  // 1 段：仅目标段
+  const one = [];
+  for (const [mask, seg] of groups[0]) {
+    if (mask === targetBit) one.push(seg);
+  }
+  const bestOne = pickBest(one);
+  if (bestOne) return bestOne;
+
+  // 2 段：祖先段（可取最近 7 层中任意一层）+ 目标段
+  const two = new Set();
+  for (const [mask3, s3] of groups[0]) {
+    for (let level = 1; level < chain.length; level++) {
+      for (const [mask1, s1] of groups[level]) {
+        if (combine(mask1, mask3, 'descendant') === targetBit) two.add(`${s1} ${s3}`);
+        if (level === 1 && combine(mask1, mask3, 'child') === targetBit) two.add(`${s1} > ${s3}`);
+      }
+    }
+  }
+  const bestTwo = pickBest(two);
+  if (bestTwo) return bestTwo;
+
+  // 3 段：两层祖先（高层 level1 > 低层 level2）+ 目标段
+  const three = new Set();
+  for (const [mask3, s3] of groups[0]) {
+    for (let level2 = 1; level2 < chain.length; level2++) {
+      for (const [mask2, s2] of groups[level2]) {
+        for (const c2 of (level2 === 1 ? ['child', 'descendant'] : ['descendant'])) {
+          // 目标本身必须仍能匹配（掩码组合的固有前提，顺带剪枝）
+          const after2 = combine(mask2, mask3, c2);
+          if (!(after2 & targetBit)) continue;
+          for (let level1 = level2 + 1; level1 < chain.length; level1++) {
+            for (const [mask1, s1] of groups[level1]) {
+              for (const c1 of (level1 === level2 + 1 ? ['child', 'descendant'] : ['descendant'])) {
+                if (combine(mask1, after2, c1) === targetBit) {
+                  three.add(join3(s1, c1, s2, c2, s3));
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return pickBest(three);
+}

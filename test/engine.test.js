@@ -9,6 +9,7 @@ import {
   countElements,
   decodeCharRefs,
   findByPath,
+  findUniqueSelector,
   matchesSelector,
   parseHtml,
   parseSelector,
@@ -508,6 +509,129 @@ test('等价精简：结果为最小值（任何真子集都不再等价）', ()
   // 0/3 二选一（字典序取 0）；1、2 各自唯一负责；4 可删
   assert.deepEqual(r.kept, [0, 1, 2]);
   assertEquivalent(html, rules, r.kept);
+});
+
+/* ---------- 唯一选择器 ---------- */
+
+function locate(html, path) {
+  const { roots, errors } = parseHtml(html);
+  assert.deepEqual(errors, []);
+  return findUniqueSelector(roots, findByPath(roots, path));
+}
+
+/** 结果必须真的在整棵树上只命中目标（用现有匹配规则复核）。 */
+function assertUnique(html, path, selector) {
+  const { roots } = parseHtml(html);
+  const target = findByPath(roots, path);
+  const parsed = parseSelector(selector);
+  const hits = [];
+  const walk = (node) => {
+    if (matchesSelector(node, parsed)) hits.push(node);
+    node.children.forEach(walk);
+  };
+  roots.forEach(walk);
+  assert.deepEqual(hits, [target], `"${selector}" 应当只命中 ${path}`);
+}
+
+test('唯一选择器：唯一 id 直接命中（1 段）', () => {
+  const html = '<section id="main"><p>x</p></section>';
+  // "section"(7) 与 "#main"(5) 都唯一，#main 更短
+  assert.equal(locate(html, '0'), '#main');
+  assertUnique(html, '0', '#main');
+});
+
+test('唯一选择器：1 段候选按长度最短、字典序最小择优', () => {
+  // 目标同时唯一拥有类型 span、id #zz 与类 .a：.a(2) < #zz(3) < span(4)
+  const html = '<div><span id="zz" class="a">x</span></div>';
+  assert.equal(locate(html, '0.0'), '.a');
+  assertUnique(html, '0.0', '.a');
+  // 无类名时：#zz(3) 短于 span(4)
+  assert.equal(locate('<div><span id="zz">x</span></div>', '0.0'), '#zz');
+  // 无 id / 类时退回类型选择器
+  assert.equal(locate('<div><span>x</span></div>', '0.0'), 'span');
+  // 等长时取字典序：#ab 与 .cd 均为 3 字符，'#'(35) < '.'(46)
+  assert.equal(locate('<div><span id="ab" class="cd">x</span></div>', '0.0'), '#ab');
+});
+
+test('唯一选择器：段数最少优先于字符串更短', () => {
+  // 目标可用 1 段 ".long-class-name"(16) 唯一命中；2 段 "#a p"(5) 虽短但段数更多
+  const html = '<div id="a"><p class="long-class-name">x</p></div><p>y</p>';
+  assert.equal(locate(html, '0.0'), '.long-class-name');
+  assertUnique(html, '0.0', '.long-class-name');
+});
+
+test('唯一选择器：1 段不够时生成 2 段（后代空格）', () => {
+  const html = '<div id="a"><p>x</p></div><div id="b"><p>y</p></div>';
+  // 目标 p 自身无唯一 1 段；祖先 #a 唯一 → "#a p"
+  assert.equal(locate(html, '0.0'), '#a p');
+  assertUnique(html, '0.0', '#a p');
+  assert.equal(locate(html, '1.0'), '#b p');
+});
+
+test('唯一选择器：id / 类名不合法（选择器语法无法表达）时不计入候选', () => {
+  // id 含空格、类名含 "." 均不合法；唯一可用的是类型
+  const html = '<div id="a b"><p class="x.y">t</p></div>';
+  assert.equal(locate(html, '0'), 'div');
+  assert.equal(locate(html, '0.0'), 'p');
+  // 全部特征都不可表达且类型不唯一 → 无候选
+  const html2 = '<p id="a b">1</p><p id="c d">2</p>';
+  assert.equal(locate(html2, '0'), null);
+});
+
+test('唯一选择器：重复 id 时该 #id 不是唯一候选', () => {
+  // #dup 命中两个元素，不能作为唯一选择器；第二个 #dup 借助父级 section 区分
+  const html = '<div id="dup"><p>1</p></div><section><div id="dup"><p>2</p></div></section>';
+  const sel = locate(html, '1.0');
+  assert.equal(sel, 'section div');
+  assertUnique(html, '1.0', sel);
+});
+
+test('唯一选择器：直接子代 > 与后代空格按树结构区分', () => {
+  // 目标 span 的唯一祖先特征在祖父 #a 上，父级 section 无特征 → 后代空格跨层
+  const html = '<div id="a"><section><span>x</span></section></div><div id="b"><span>y</span></div>';
+  assert.equal(locate(html, '0.0.0'), '#a span');
+  assertUnique(html, '0.0.0', '#a span');
+  // 父级有唯一类名且与目标相邻：".u span"(8) 短于 ".u > span"(10)
+  const html2 = '<div class="u"><span>x</span></div><section><span>y</span></section>';
+  assert.equal(locate(html2, '0.0'), '.u span');
+  assertUnique(html2, '0.0', '.u span');
+});
+
+test('唯一选择器：需要 3 段时组合两层祖先', () => {
+  // 目标 p 与其他分支的 p 共享单层祖先特征：.x 命中两处、.y 命中两处，1/2 段均不唯一
+  const html = '<div class="x"><div class="y"><p>1</p></div></div>'
+    + '<div class="x"><div class="z"><p>2</p></div></div>'
+    + '<div class="w"><div class="y"><p>3</p></div></div>';
+  const sel = locate(html, '0.0.0');
+  assert.equal(sel, '.x .y p');
+  assertUnique(html, '0.0.0', sel);
+});
+
+test('唯一选择器：祖先特征最远取 7 层，超出则无候选', () => {
+  // depth 层相同 div 嵌套包住 span；markLevel（1=span 的父）处的 div 带 id
+  const nest = (depth, markLevel, id) => {
+    let html = '<span>x</span>';
+    for (let level = 1; level <= depth; level++) {
+      const attr = level === markLevel ? ` id="${id}"` : '';
+      html = `<div${attr}>${html}</div>`;
+    }
+    return html;
+  };
+  const spanPath = '0.0.0.0.0.0.0.0.0'; // 8 层 div 之下的 span
+  // 唯一特征在第 7 层祖先上：在范围内 → "#m7 span"
+  const htmlIn = nest(8, 7, 'm7') + nest(8, 0, '');
+  assert.equal(locate(htmlIn, spanPath), '#m7 span');
+  assertUnique(htmlIn, spanPath, '#m7 span');
+  // 唯一特征在第 8 层祖先上：超出最近 7 层，其余特征完全雷同 → 无候选
+  const htmlOut = nest(8, 8, 'm8') + nest(8, 0, '');
+  assert.equal(locate(htmlOut, spanPath), null);
+});
+
+test('唯一选择器：目标不在树中返回 null', () => {
+  const { roots } = parseHtml('<div><p>x</p></div>');
+  const { roots: other } = parseHtml('<p>y</p>');
+  assert.equal(findUniqueSelector(roots, other[0]), null);
+  assert.equal(findUniqueSelector(roots, null), null);
 });
 
 console.log(`\n全部 ${passed} 项测试通过。`);

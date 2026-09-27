@@ -4,6 +4,7 @@ import { dirname, extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   ALLOWED_PROPS,
+  LOCATOR_MAX_ELEMENTS,
   SIMPLIFY_MAX_ELEMENTS,
   SIMPLIFY_MAX_RULES,
   analyzeElement,
@@ -11,6 +12,7 @@ import {
   computeAllStyles,
   countElements,
   findByPath,
+  findUniqueSelector,
   parseHtml,
   simplifyRules,
 } from './src/engine.js';
@@ -181,6 +183,58 @@ async function handleSimplify(req, res) {
   });
 }
 
+async function handleLocator(req, res) {
+  const body = await readJson(req);
+  const html = typeof body.html === 'string' ? body.html : '';
+  const { roots, errors: htmlErrors } = parseHtml(html);
+
+  if (htmlErrors.length) {
+    sendJson(res, 200, {
+      ok: false,
+      htmlErrors,
+      message: 'HTML 存在解析错误，请先修正后再获取唯一选择器。',
+    });
+    return;
+  }
+
+  const elementCount = countElements(roots);
+  if (elementCount > LOCATOR_MAX_ELEMENTS) {
+    sendJson(res, 200, {
+      ok: false,
+      elementCount,
+      message: `唯一选择器仅支持至多 ${LOCATOR_MAX_ELEMENTS} 个元素，当前 HTML 有 ${elementCount} 个元素；规模超限，未做任何改动。`,
+    });
+    return;
+  }
+
+  const node = findByPath(roots, body.path);
+  if (!node) {
+    sendJson(res, 200, {
+      ok: false,
+      elementCount,
+      message: '找不到该元素（HTML 可能已被修改），请重新点击预览中的元素。',
+    });
+    return;
+  }
+
+  const selector = findUniqueSelector(roots, node);
+  if (selector === null) {
+    sendJson(res, 200, {
+      ok: false,
+      elementCount,
+      message: '在目标元素及其最近 7 层祖先（至多 3 段）范围内，没有只命中该元素的选择器；HTML 未被改动。',
+    });
+    return;
+  }
+
+  sendJson(res, 200, {
+    ok: true,
+    elementCount,
+    selector,
+    element: { tag: node.tag, id: node.id, classes: node.classes, path: node.path },
+  });
+}
+
 async function handleExamples(res) {
   let files = [];
   try {
@@ -230,6 +284,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && pathname === '/api/compute') return await handleCompute(req, res);
     if (req.method === 'POST' && pathname === '/api/analyze') return await handleAnalyze(req, res);
     if (req.method === 'POST' && pathname === '/api/simplify') return await handleSimplify(req, res);
+    if (req.method === 'POST' && pathname === '/api/locator') return await handleLocator(req, res);
     if (req.method === 'GET' && pathname === '/api/examples') return await handleExamples(res);
     if (req.method === 'GET') return await serveStatic(req, res, pathname);
     sendJson(res, 405, { error: 'Method Not Allowed' });

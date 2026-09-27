@@ -62,6 +62,16 @@
       <div id="previewHost" class="preview-host"></div>
       <div id="selectedInfo" class="selected-info">未选择元素</div>
 
+      <div id="locatorBox" class="locator-box" hidden>
+        <div class="locator-head">
+          <span class="locator-title">唯一选择器</span>
+          <button id="copyLocatorBtn" type="button" class="btn-secondary btn-mini"
+            title="复制该选择器，粘贴到规则选择器输入框即可直接使用">复制</button>
+        </div>
+        <code id="locatorSelector" class="locator-selector"></code>
+        <div id="locatorMsg" class="locator-msg" hidden></div>
+      </div>
+
       <div class="prop-row">
         <label for="propSelect">分析属性：</label>
         <select id="propSelect">
