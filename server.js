@@ -4,6 +4,9 @@ import { dirname, extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   ALLOWED_PROPS,
+  LOCATOR_MAX_ANCESTORS,
+  LOCATOR_MAX_ELEMENTS,
+  LOCATOR_MAX_SEGMENTS,
   SIMPLIFY_MAX_ELEMENTS,
   SIMPLIFY_MAX_RULES,
   analyzeElement,
@@ -13,6 +16,7 @@ import {
   findByPath,
   parseHtml,
   simplifyRules,
+  uniqueLocator,
 } from './src/engine.js';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -181,6 +185,64 @@ async function handleSimplify(req, res) {
   });
 }
 
+async function handleLocator(req, res) {
+  const body = await readJson(req);
+  const html = typeof body.html === 'string' ? body.html : '';
+  const { roots, errors: htmlErrors } = parseHtml(html);
+
+  if (htmlErrors.length) {
+    sendJson(res, 200, {
+      ok: false,
+      htmlErrors,
+      message: 'HTML 存在解析错误，请先修正后再生成唯一选择器；输入未被改动。',
+    });
+    return;
+  }
+
+  const elementCount = countElements(roots);
+  if (elementCount > LOCATOR_MAX_ELEMENTS) {
+    sendJson(res, 200, {
+      ok: false,
+      htmlErrors,
+      elementCount,
+      message: `唯一选择器仅支持至多 ${LOCATOR_MAX_ELEMENTS} 个元素，当前 HTML 有 ${elementCount} 个元素；规模超限，未做任何改动。`,
+    });
+    return;
+  }
+
+  const node = findByPath(roots, body.path);
+  if (!node) {
+    sendJson(res, 200, {
+      ok: false,
+      htmlErrors,
+      elementCount,
+      message: '找不到该元素（HTML 可能已被修改），请重新点击预览中的元素。',
+    });
+    return;
+  }
+
+  const { selector, segments } = uniqueLocator(roots, node);
+  if (selector === null) {
+    sendJson(res, 200, {
+      ok: false,
+      htmlErrors,
+      elementCount,
+      message: `在最近 ${LOCATOR_MAX_ANCESTORS} 层祖先、至多 ${LOCATOR_MAX_SEGMENTS} 段`
+        + '（类型 / 合法 #id / 单个合法 .class）的约束下，不存在只命中该元素的选择器。',
+    });
+    return;
+  }
+
+  sendJson(res, 200, {
+    ok: true,
+    htmlErrors,
+    elementCount,
+    path: node.path,
+    selector,
+    segments,
+  });
+}
+
 async function handleExamples(res) {
   let files = [];
   try {
@@ -230,6 +292,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && pathname === '/api/compute') return await handleCompute(req, res);
     if (req.method === 'POST' && pathname === '/api/analyze') return await handleAnalyze(req, res);
     if (req.method === 'POST' && pathname === '/api/simplify') return await handleSimplify(req, res);
+    if (req.method === 'POST' && pathname === '/api/locator') return await handleLocator(req, res);
     if (req.method === 'GET' && pathname === '/api/examples') return await handleExamples(res);
     if (req.method === 'GET') return await serveStatic(req, res, pathname);
     sendJson(res, 405, { error: 'Method Not Allowed' });

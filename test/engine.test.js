@@ -13,6 +13,7 @@ import {
   parseHtml,
   parseSelector,
   simplifyRules,
+  uniqueLocator,
 } from '../src/engine.js';
 
 let passed = 0;
@@ -508,6 +509,96 @@ test('等价精简：结果为最小值（任何真子集都不再等价）', ()
   // 0/3 二选一（字典序取 0）；1、2 各自唯一负责；4 可删
   assert.deepEqual(r.kept, [0, 1, 2]);
   assertEquivalent(html, rules, r.kept);
+});
+
+/* ---------- 唯一选择器 ---------- */
+
+function locator(html, path) {
+  const { roots, errors } = parseHtml(html);
+  assert.deepEqual(errors, []);
+  const node = findByPath(roots, path);
+  assert.ok(node, `路径 ${path} 应存在`);
+  return uniqueLocator(roots, node);
+}
+
+test('唯一选择器：目标段本身唯一时返回 1 段最优', () => {
+  // 目标 p 是全树唯一的 p
+  assert.deepEqual(locator('<div id="main"><p>x</p></div>', '0.0'), { selector: 'p', segments: 1 });
+  // id 与 class 都唯一：等长时字典序 '#' 在 '.' 前
+  assert.deepEqual(locator('<div><p id="zz" class="aa">x</p><p>y</p></div>', '0.0'), { selector: '#zz', segments: 1 });
+  // 类型段唯一时直接用最短的类型段
+  assert.deepEqual(locator('<div><section><p>x</p></section></div>', '0.0'), { selector: 'section', segments: 1 });
+});
+
+test('唯一选择器：同段数先比字符串长度，再比字典序', () => {
+  // .aa(4) 短于 #zzzzz(6)，即使 '#' 字典序更小
+  assert.deepEqual(locator('<div><p id="zzzzz" class="aa">x</p><p>y</p></div>', '0.0'), { selector: '.aa', segments: 1 });
+  // 多个唯一 class：等长取字典序最小
+  assert.deepEqual(locator('<div><p class="bb aa">1</p><p>2</p></div>', '0.0'), { selector: '.aa', segments: 1 });
+});
+
+test('唯一选择器：1 段不唯一时用 2 段，等长时后代空格字典序小于 >', () => {
+  const html = '<div><p class="a">1</p><section><p class="a">2</p></section></div>';
+  // 目标 section 内的 p：p / .a 均命中 2 个；section p 与 section>p 等长，空格更小
+  assert.deepEqual(locator(html, '0.1.0'), { selector: 'section p', segments: 2 });
+});
+
+test('唯一选择器：唯一性验证在整棵树上进行', () => {
+  // .x 在另一棵子树中也出现：1 段 .x 不唯一；#a p 为 2 段最优
+  const html = '<div id="a"><p class="x">1</p></div><div><p class="x">2</p></div>';
+  assert.deepEqual(locator(html, '0.0'), { selector: '#a p', segments: 2 });
+});
+
+test('唯一选择器：需要 3 段时返回 3 段最优', () => {
+  const html = '<div><div><section><p>1</p></section></div></div><div><section><p>2</p></section></div>';
+  // p1 的祖先段（div / section）与 p2 完全同构，任意 1、2 段都同时命中两者；
+  // div div p 与 div>div p 等长，空格字典序更小
+  assert.deepEqual(locator(html, '0.0.0.0'), { selector: 'div div p', segments: 3 });
+});
+
+test('唯一选择器：非法 id / class 不作为段', () => {
+  // #1a 非法（数字开头）：唯一可区分特征不可用 → 无候选
+  assert.equal(locator('<section><p id="1a">x</p><p>y</p></section>', '0.0').selector, null);
+  // 合法 id 时同样结构可解
+  assert.deepEqual(locator('<section><p id="a1">x</p><p>y</p></section>', '0.0'), { selector: '#a1', segments: 1 });
+  // class 含非法字符（解码出的 ">"）同样不作为段，但合法 class 可用
+  assert.deepEqual(locator('<div><p class="a&gt;b ok">x</p><p>y</p></div>', '0.0'), { selector: '.ok', segments: 1 });
+});
+
+test('唯一选择器：祖先段至多取最近 7 层', () => {
+  // #far 是目标的第 8 层祖先，不可用；7 层内与另一棵同构子树无法区分 → 无候选
+  const inner = '<div>'.repeat(7) + '<p>1</p>' + '</div>'.repeat(7);
+  const html = `<div id="far">${inner}</div>` + '<div>'.repeat(7) + '<p>2</p>' + '</div>'.repeat(7);
+  assert.equal(locator(html, '0.0.0.0.0.0.0.0.0').selector, null);
+  // 同一结构去掉一层后 #far 进入最近 7 层 → #far p 唯一
+  const inner7 = '<div>'.repeat(6) + '<p>1</p>' + '</div>'.repeat(6);
+  const html7 = `<div id="far">${inner7}</div>` + '<div>'.repeat(7) + '<p>2</p>' + '</div>'.repeat(7);
+  assert.deepEqual(locator(html7, '0.0.0.0.0.0.0.0'), { selector: '#far p', segments: 2 });
+});
+
+test('唯一选择器：完全同构的子树无法区分时返回无候选', () => {
+  const html = '<div><p>1</p><p>2</p></div>';
+  assert.equal(locator(html, '0.0').selector, null);
+  assert.equal(locator(html, '0.1').selector, null);
+});
+
+test('唯一选择器：结果确实在整棵树上只命中目标（含 40 元素规模）', () => {
+  const html = `<div>${'<p>x</p>'.repeat(38)}<p class="target">x</p></div>`;
+  const { roots, errors } = parseHtml(html);
+  assert.deepEqual(errors, []);
+  assert.equal(countElements(roots), 40);
+  const r = locator(html, '0.38');
+  assert.deepEqual(r, { selector: '.target', segments: 1 });
+  // 用现有匹配规则复核：全树只有目标命中
+  const node = findByPath(roots, '0.38');
+  const parsed = parseSelector(r.selector);
+  const hits = [];
+  const walk = (n) => {
+    if (matchesSelector(n, parsed)) hits.push(n);
+    n.children.forEach(walk);
+  };
+  roots.forEach(walk);
+  assert.deepEqual(hits, [node]);
 });
 
 console.log(`\n全部 ${passed} 项测试通过。`);

@@ -10,6 +10,7 @@ const propSelect = $('#propSelect');
 const analysisBox = $('#analysis');
 const layerOrderInfo = $('#layerOrderInfo');
 const selectedInfoBox = $('#selectedInfo');
+const locatorInfo = $('#locatorInfo');
 const exampleSelect = $('#exampleSelect');
 const loadExampleBtn = $('#loadExampleBtn');
 const previewHost = $('#previewHost');
@@ -39,6 +40,7 @@ const state = {
 
 let computeSeq = 0;
 let analyzeSeq = 0;
+let locatorSeq = 0;
 
 /* ---------------- 工具 ---------------- */
 
@@ -167,6 +169,7 @@ shadow.addEventListener('click', (e) => {
   markPicked(state.selectedPath);
   selectedInfoBox.innerHTML = describeElement(el);
   analyze();
+  locate();
 });
 
 shadow.addEventListener('mouseover', (e) => {
@@ -379,9 +382,13 @@ async function compute() {
     applyStyles();
     if (state.selectedPath && elByPath(state.selectedPath)) {
       analyze();
+      locate();
     } else {
       analysisBox.innerHTML = '<p class="empty-tip">点击预览中的元素后，此处展示匹配声明、胜出值与落败原因。</p>';
+      renderLocator(null);
     }
+  } else {
+    renderLocator(null);
   }
 }
 
@@ -401,6 +408,66 @@ async function analyze() {
   }
   if (seq !== analyzeSeq) return;
   renderAnalysis(data);
+}
+
+/* ---------------- 唯一选择器 ---------------- */
+
+async function locate() {
+  if (!state.selectedPath) {
+    renderLocator(null);
+    return;
+  }
+  const seq = ++locatorSeq;
+  let data;
+  try {
+    data = await postJson('/api/locator', { html: state.html, path: state.selectedPath });
+  } catch (err) {
+    if (seq === locatorSeq) renderLocator({ ok: false, message: `请求失败：${err.message}` });
+    return;
+  }
+  if (seq !== locatorSeq) return;
+  renderLocator(data);
+}
+
+function renderLocator(data) {
+  if (!data) {
+    locatorInfo.hidden = true;
+    locatorInfo.innerHTML = '';
+    return;
+  }
+  locatorInfo.hidden = false;
+  if (data.ok) {
+    locatorInfo.innerHTML = `
+      <span class="locator-label">唯一选择器：</span>
+      <code class="locator-selector" title="在整棵元素树中只命中当前元素（${data.segments} 段）">${escapeHtml(data.selector)}</code>
+      <button type="button" class="btn-secondary locator-copy">复制</button>`;
+    locatorInfo.querySelector('.locator-copy').addEventListener('click', () => copyLocator(data.selector));
+  } else {
+    locatorInfo.innerHTML = `
+      <span class="locator-label">唯一选择器：</span>
+      <span class="locator-fail">${escapeHtml(data.message || '无法生成唯一选择器。')}</span>`;
+  }
+}
+
+async function copyLocator(selector) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(selector);
+    } else {
+      // 非安全上下文（如 http:// 局域网地址）的兜底复制方式
+      const ta = document.createElement('textarea');
+      ta.value = selector;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.append(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    showToast('唯一选择器已复制');
+  } catch {
+    showToast('复制失败，请手动选择文本复制');
+  }
 }
 
 /* ---------------- 等价精简 ---------------- */
@@ -563,6 +630,7 @@ function loadExample(ex) {
   htmlEditor.value = state.html;
   renderRules();
   selectedInfoBox.textContent = '未选择元素';
+  renderLocator(null);
   compute();
 }
 

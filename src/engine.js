@@ -721,3 +721,138 @@ export function simplifyRules(roots, rules) {
     originalLayerOrder: full.layerOrder,
   };
 }
+
+/* ------------------------------------------------------------------ */
+/* 唯一选择器                                                           */
+/* ------------------------------------------------------------------ */
+
+/** 唯一选择器允许的最大元素数、向上追溯的祖先层数与最大段数。 */
+export const LOCATOR_MAX_ELEMENTS = 40;
+export const LOCATOR_MAX_ANCESTORS = 7;
+export const LOCATOR_MAX_SEGMENTS = 3;
+
+/**
+ * 节点可提供的段字符串：类型、合法 #id、单个合法 .class。
+ * 只保留能写进合法选择器的标识符（与 parseSelector 相同的 IDENT_RE 规则），
+ * id / class 中含有其他字符（空白、数字开头等）时该值不能作为段。
+ * 同一节点上匹配集完全相同的段，在任何选择器中的命中效果都一致，
+ * 故只保留（字符串长度最短、字典序最小的）代表，不会因此丢失最优解。
+ */
+function segmentStrings(node, elements) {
+  const raw = [node.tag];
+  if (node.id && IDENT_RE.test(node.id)) raw.push(`#${node.id}`);
+  const seenClasses = new Set();
+  for (const c of node.classes) {
+    if (!IDENT_RE.test(c) || seenClasses.has(c)) continue;
+    seenClasses.add(c);
+    raw.push(`.${c}`);
+  }
+  const bestByMatch = new Map(); // 匹配集签名 -> 最优段字符串
+  for (const seg of raw) {
+    const parsed = parseSelector(seg);
+    let key = '';
+    for (const el of elements) key += matchesSelector(el, parsed) ? '1' : '0';
+    const cur = bestByMatch.get(key);
+    if (!cur || seg.length < cur.length || (seg.length === cur.length && seg < cur)) {
+      bestByMatch.set(key, seg);
+    }
+  }
+  return [...bestByMatch.values()];
+}
+
+/** 候选排序：字符串长度最短者优先，并列时字典序最小者优先。 */
+function byLengthThenLex(a, b) {
+  return a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
+}
+
+/**
+ * 为目标元素生成"唯一选择器"：在整棵元素树中只命中目标。
+ *
+ * 候选构造（与预览、/api/compute 使用同一棵元素树）：
+ *  - 段取自目标及最近 LOCATOR_MAX_ANCESTORS 层祖先的类型、合法 #id、单个合法 .class；
+ *  - 必须含目标段（最右段），至多 LOCATOR_MAX_SEGMENTS 段；
+ *  - 段间用后代空格或直接子代 > 连接（结果中 > 两侧不加空格，使长度与字典序比较确定）。
+ *
+ * ">" 仅在两段对应节点为父子（链上相邻层）时才生成：若某段字符串能匹配目标的
+ * 父元素，该字符串必然也在父节点的段列表中（type / 合法 #id / 合法 .class 的
+ * 定义对匹配它的节点自洽），会由相邻层位置生成同一候选，故跨层 ">" 候选不可能
+ * 命中目标，无需生成。
+ *
+ * 每个候选都用 parseSelector + matchesSelector（与规则判定完全相同的匹配规则）
+ * 在整棵树上验证只命中目标；按段数最少、字符串长度最短、字典序最小返回。
+ *
+ * 返回 { selector, segments }；无候选时返回 { selector: null, segments: 0 }。
+ */
+export function uniqueLocator(roots, target) {
+  const elements = [];
+  const collect = (n) => { elements.push(n); n.children.forEach(collect); };
+  roots.forEach(collect);
+
+  // 目标及最近 LOCATOR_MAX_ANCESTORS 层祖先（chain[0] 为目标）
+  const chain = [];
+  for (let n = target; n && chain.length <= LOCATOR_MAX_ANCESTORS; n = n.parent) {
+    chain.push(n);
+  }
+  const segPool = chain.map((n) => segmentStrings(n, elements));
+  const targetSegs = segPool[0];
+
+  // 用现有选择器匹配规则验证：候选在整棵树上只命中目标
+  const isUnique = (source) => {
+    let parsed;
+    try { parsed = parseSelector(source); } catch { return false; }
+    let hitTarget = false;
+    for (const el of elements) {
+      if (!matchesSelector(el, parsed)) continue;
+      if (el === target) hitTarget = true;
+      else return false; // 命中了其他元素
+    }
+    return hitTarget;
+  };
+
+  // 1 段：目标段本身
+  {
+    const one = targetSegs.filter(isUnique).sort(byLengthThenLex);
+    if (one.length) return { selector: one[0], segments: 1 };
+  }
+
+  // 2 段：祖先段 + 目标段
+  {
+    const two = new Set();
+    for (let i = 1; i < chain.length; i++) {
+      const conns = i === 1 ? [' ', '>'] : [' '];
+      for (const b of segPool[i]) {
+        for (const t of targetSegs) {
+          for (const c of conns) two.add(b + c + t);
+        }
+      }
+    }
+    for (const sel of [...two].sort(byLengthThenLex)) {
+      if (isUnique(sel)) return { selector: sel, segments: 2 };
+    }
+  }
+
+  // 3 段：两个祖先段（远 → 近）+ 目标段
+  {
+    const three = new Set();
+    for (let j = 1; j < chain.length; j++) {
+      const c2s = j === 1 ? [' ', '>'] : [' '];
+      for (let i = j + 1; i < chain.length; i++) {
+        const c1s = i - j === 1 ? [' ', '>'] : [' '];
+        for (const a of segPool[i]) {
+          for (const b of segPool[j]) {
+            for (const t of targetSegs) {
+              for (const c1 of c1s) {
+                for (const c2 of c2s) three.add(a + c1 + b + c2 + t);
+              }
+            }
+          }
+        }
+      }
+    }
+    for (const sel of [...three].sort(byLengthThenLex)) {
+      if (isUnique(sel)) return { selector: sel, segments: 3 };
+    }
+  }
+
+  return { selector: null, segments: 0 };
+}
